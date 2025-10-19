@@ -1,0 +1,5 @@
+User-agent: *
+Disallow: /
+
+# Prevent all crawlers from indexing this experimental app
+# This includes Google, Bing, and other search engines
