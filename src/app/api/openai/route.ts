@@ -14,17 +14,19 @@ export async function POST(request: Request) {
             apiKey: process.env.OPENAI_API_KEY,
         });
 
-        const stream = await client.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: [
-                {
-                    role: "user",
-                    content: message
-                }
-            ],
-            max_tokens: 150,
-            temperature: 0.7,
-            stream: true,
+
+        const assistantId = process.env.OPENAI_ASSISTANT_ID || 'asst_xxxxxxxxx';
+
+
+        const thread = await client.beta.threads.create();
+        await client.beta.threads.messages.create(thread.id, {
+            role: "user",
+            content: message
+        });
+
+
+        const stream = client.beta.threads.runs.stream(thread.id, {
+            assistant_id: assistantId,
         });
 
         // Create a ReadableStream for streaming the response
@@ -32,15 +34,29 @@ export async function POST(request: Request) {
         const readable = new ReadableStream({
             async start(controller) {
                 try {
-                    for await (const chunk of stream) {
-                        const content = chunk.choices[0]?.delta?.content || '';
-                        if (content) {
-                            const data = `data: ${JSON.stringify({ content })}\n\n`;
-                            controller.enqueue(encoder.encode(data));
+                    for await (const event of stream) {
+                        // Handle different types of events from the Assistant stream
+                        if (event.event === 'thread.message.delta') {
+                            const content = event.data.delta.content?.[0];
+                            if (content?.type === 'text' && content.text?.value) {
+                                const data = `data: ${JSON.stringify({ content: content.text.value })}\n\n`;
+                                controller.enqueue(encoder.encode(data));
+                            }
+                        }
+
+                        // Handle run completion
+                        if (event.event === 'thread.run.completed') {
+                            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+                            controller.close();
+                            return;
+                        }
+
+                        // Handle errors
+                        if (event.event === 'thread.run.failed') {
+                            controller.error(new Error('Assistant run failed'));
+                            return;
                         }
                     }
-                    controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-                    controller.close();
                 } catch (error) {
                     controller.error(error);
                 }
